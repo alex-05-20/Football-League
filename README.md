@@ -103,3 +103,45 @@ psql -d football_league -f queries.sql
 ## 👤 Author
 Alex Cabrel Tsapi Koudjou
 GitHub: https://github.com/alex-05-20
+
+
+import dataiku
+import pandas as pd
+
+# Read input dataset
+input_dataset = dataiku.Dataset("stacked_dataset")
+df = input_dataset.get_dataframe()
+
+# Convert IDs to strings for checking
+ids = df["ID"].astype("string").str.strip()
+
+# Identify null, empty, HP and GHS IDs
+separate_mask = (
+    ids.isna()
+    | ids.eq("")
+    | ids.str.upper().str.startswith(("HP", "GHS"))
+).fillna(False)
+
+# Output 1: Valid IDs, deduplicated
+unique_ids = (
+    df.loc[~separate_mask]
+    .drop_duplicates(subset=["ID"], keep="first")
+    .reset_index(drop=True)
+)
+
+# Output 2: Null, HP and GHS IDs (all retained)
+null_ids = (
+    df.loc[separate_mask]
+    .reset_index(drop=True)
+)
+
+# Write outputs
+dataiku.Dataset("unique_ids").write_with_schema(unique_ids)
+dataiku.Dataset("null_ids").write_with_schema(null_ids)
+
+# Summary
+print(f"Total input rows: {len(df)}")
+print(f"Unique valid IDs: {len(unique_ids)}")
+print(f"Separated rows (null/HP/GHS): {len(null_ids)}")
+print(f"Duplicates removed: {len(df) - len(unique_ids) - len(null_ids)}")
+
