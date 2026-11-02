@@ -105,6 +105,7 @@ Alex Cabrel Tsapi Koudjou
 GitHub: https://github.com/alex-05-20
 
 
+
 import dataiku
 import pandas as pd
 
@@ -187,4 +188,3 @@ print(f"Input rows: {len(df)}")
 print(f"Merged records: {len(merged_df)}")
 print(f"Rows with missing IDs: {len(missing_id_rows)}")
 print(f"Final output rows: {len(unique_ids)}")
-
