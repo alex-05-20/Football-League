@@ -112,96 +112,79 @@ import pandas as pd
 input_dataset = dataiku.Dataset("stacked_dataset")
 df = input_dataset.get_dataframe()
 
+# Define the two ID columns
+id_columns = ["ID1", "ID2"]
+
 # Normalize IDs
-ids = df["ID"].astype("string").str.strip()
+for col in id_columns:
+    df[col] = df[col].astype("string").str.strip()
+    df[col] = df[col].replace("", pd.NA)
 
-# Identify null, empty, HP and GHS IDs
-separate_mask = (
-    ids.isna()
-    | ids.eq("")
-    | ids.str.upper().str.startswith(("HP", "GHS"), na=False)
-).fillna(False)
+# Identify other columns
+other_columns = [
+    col for col in df.columns
+    if col not in id_columns
+]
 
-# Output 1: Separated IDs (all retained)
-null_ids = df.loc[separate_mask].copy().reset_index(drop=True)
-
-# Work only with valid IDs
-valid_df = df.loc[~separate_mask].copy()
-valid_df["ID"] = ids.loc[~separate_mask]
-
-# Normalize whitespace and empty values
-other_columns = [col for col in valid_df.columns if col != "ID"]
-
+# Normalize empty values
 for col in other_columns:
-    valid_df[col] = valid_df[col].map(
+    df[col] = df[col].map(
         lambda x: x.strip() if isinstance(x, str) else x
     )
-    valid_df[col] = valid_df[col].replace("", pd.NA)
+    df[col] = df[col].replace(
+        r"^\s*$", pd.NA, regex=True
+    )
 
-# Store resolved records and conflicts
-resolved_records = []
-conflicting_groups = []
+# Preserve rows with missing IDs
+missing_id_rows = df[
+    df[id_columns].isna().any(axis=1)
+].copy()
 
-# Analyze each ID
-for id_value, group in valid_df.groupby("ID", sort=False):
+# Rows with both IDs present
+valid_df = df[
+    df[id_columns].notna().all(axis=1)
+].copy()
 
-    merged_record = {"ID": id_value}
-    conflict_columns = []
+# Merge function
+def merge_values(series):
+    values = series.dropna()
 
-    for col in other_columns:
+    if values.empty:
+        return pd.NA
 
-        # Ignore missing values
-        values = group[col].dropna()
+    # Keep first non-empty value
+    return values.iloc[0]
 
-        # Find distinct non-null values
-        unique_values = values.unique()
-
-        if len(unique_values) == 0:
-            merged_record[col] = pd.NA
-
-        elif len(unique_values) == 1:
-            # Identical or complementary information
-            merged_record[col] = unique_values[0]
-
-        else:
-            # Different values for the same ID
-            conflict_columns.append(col)
-
-    if not conflict_columns:
-        # Safe to merge into a single record
-        resolved_records.append(merged_record)
-
-    else:
-        # Retain every row for manual investigation
-        conflict_group = group.copy()
-        conflict_group["CONFLICT_COLUMNS"] = ", ".join(
-            conflict_columns
-        )
-        conflicting_groups.append(conflict_group)
-
-# Build output datasets
-unique_ids = pd.DataFrame(
-    resolved_records,
-    columns=valid_df.columns
-).reset_index(drop=True)
-
-if conflicting_groups:
-    conflicting_ids = pd.concat(
-        conflicting_groups,
-        ignore_index=True
+# Merge only when BOTH IDs match
+if other_columns:
+    merged_df = (
+        valid_df
+        .groupby(id_columns, sort=False, as_index=False)
+        .agg({
+            col: merge_values
+            for col in other_columns
+        })
     )
 else:
-    conflicting_ids = valid_df.iloc[0:0].copy()
-    conflicting_ids["CONFLICT_COLUMNS"] = pd.Series(dtype="string")
+    merged_df = valid_df.drop_duplicates(
+        subset=id_columns
+    )
 
-# Write outputs
+# Add rows with missing IDs
+unique_ids = pd.concat(
+    [merged_df, missing_id_rows],
+    ignore_index=True
+)
+
+# Preserve original column order
+unique_ids = unique_ids[df.columns]
+
+# Write single output
 dataiku.Dataset("unique_ids").write_with_schema(unique_ids)
-dataiku.Dataset("null_ids").write_with_schema(null_ids)
-dataiku.Dataset("conflicting_ids").write_with_schema(conflicting_ids)
 
 # Summary
-print(f"Total input rows: {len(df)}")
-print(f"Unique resolved IDs: {len(unique_ids)}")
-print(f"Separated rows (NULL/HP/GHS): {len(null_ids)}")
-print(f"Conflicting IDs: {conflicting_ids['ID'].nunique()}")
-print(f"Rows requiring investigation: {len(conflicting_ids)}")
+print(f"Input rows: {len(df)}")
+print(f"Merged records: {len(merged_df)}")
+print(f"Rows with missing IDs: {len(missing_id_rows)}")
+print(f"Final output rows: {len(unique_ids)}")
+
